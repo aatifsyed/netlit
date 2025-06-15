@@ -2,6 +2,20 @@
 name = "netlit"
 version = "0.1.0"
 edition = "2024"
+authors = ["Aatif Syed <0xaatif@gmail.com>"]
+homepage = "https://crates.io/crates/netlit"
+documentation = "https://docs.rs/netlit"
+repository = "https://github.com/aatifsyed/netlit"
+license = "Apache-2.0 OR MIT"
+description = "Express literal IP addresses and socket addresses directly in code"
+keywords = ["net", "const"]
+categories = [
+    "web-programming",
+    "rust-patterns",
+    "no-std::no-alloc",
+    "no-std",
+    "embedded",
+]
 
 [lib]
 proc-macro = true
