@@ -3,4 +3,9 @@ name = "netlit"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[lib]
+proc-macro = true
+
+[dev-dependencies]
+quote = "1.0.40"
+expect-test = "1.5.1"
