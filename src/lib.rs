@@ -17,6 +17,14 @@ use proc_macro::{
     Span, TokenStream, TokenTree,
 };
 
+/// The whole point.
+///
+/// ```
+/// # use core::net::*;
+/// # use netlit::netlit;
+/// let _: Ipv4Addr     = netlit!(127.0.0.1);
+/// let _: SocketAddrV4 = netlit!(127.0.0.1:8000);
+/// ```
 #[proc_macro]
 pub fn netlit(item: TokenStream) -> TokenStream {
     match _netlit(item) {
