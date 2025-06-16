@@ -6,10 +6,15 @@
 //! # use netlit::netlit;
 //! assert_eq!(netlit!(127.0.0.1), Ipv4Addr::LOCALHOST);
 //! assert_eq!(netlit!(127.0.0.1:8000), SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8000));
-//! const IS_SUPPORTED: SocketAddrV4 = netlit!(127.0.0.1:8000);
+//! const SUPPORT: SocketAddrV4 = netlit!(127.0.0.1:8000);
+//! assert_eq!(netlit!(::1), Ipv6Addr::LOCALHOST);
+//! assert_eq! {
+//!     netlit!([dead:beef::1%30]:8000),
+//!     SocketAddrV6::new(Ipv6Addr::new(0xdead, 0xbeef, 0, 0, 0, 0, 0, 1), 8000, 0, 30)
+//! };
 //! ```
 
-use core::{borrow::Borrow, str::FromStr};
+use core::{fmt, net::*, str::FromStr};
 
 use proc_macro::{
     Delimiter,
@@ -24,6 +29,8 @@ use proc_macro::{
 /// # use netlit::netlit;
 /// let _: Ipv4Addr     = netlit!(127.0.0.1);
 /// let _: SocketAddrV4 = netlit!(127.0.0.1:8000);
+/// let _: Ipv6Addr     = netlit!(::1);
+/// let _: SocketAddrV6 = netlit!([::1]:8000);
 /// ```
 #[proc_macro]
 pub fn netlit(item: TokenStream) -> TokenStream {
@@ -35,53 +42,54 @@ pub fn netlit(item: TokenStream) -> TokenStream {
             colon2(),
             ident("compile_error"),
             bang(),
-            parenthesized(lit("expected `a.b.c.d` or `a.b.c.d:p`")),
+            parenthesized(lit(
+                "expected `a.b.c.d` or `a.b.c.d:p` or `a:..:h` or `[a:..:h]:p`",
+            )),
         ]),
     }
 }
 
+fn tight(mut buf: &mut dyn fmt::Write, ts: TokenStream) -> fmt::Result {
+    for tt in ts {
+        match tt {
+            TokenTree::Group(group) => {
+                let (open, close) = match group.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::None => ("", ""),
+                };
+                write!(buf, "{open}")?;
+                tight(&mut buf, group.stream())?;
+                write!(buf, "{close}")?
+            }
+            TokenTree::Ident(ident) => write!(buf, "{ident}")?,
+            TokenTree::Punct(punct) => write!(buf, "{}", punct.as_char())?,
+            TokenTree::Literal(literal) => write!(buf, "{literal}")?,
+        }
+    }
+
+    Ok(())
+}
+
 fn _netlit(input: TokenStream) -> Option<TokenStream> {
-    use proc_macro::TokenTree::{Literal, Punct};
-    Some(match &*input.into_iter().collect::<Vec<_>>() {
-        // a.b.c.d
-        [Literal(ab), Punct(dot), Literal(cd)] if is_dot(dot) => {
-            let (a, b) = dot_sep(ab)?;
-            let (c, d) = dot_sep(cd)?;
-            ipv4addr(a, b, c, d)
-        }
-
-        // a.b.c.d:p
-        [
-            Literal(ab),
-            Punct(dot),
-            Literal(cd),
-            Punct(colon),
-            Literal(port),
-        ] if is_dot(dot) && is_colon(colon) => {
-            let (a, b) = dot_sep(ab)?;
-            let (c, d) = dot_sep(cd)?;
-            socketaddrv4(a, b, c, d, port.parse()?)
-        }
-
-        _ => return None,
-    })
+    let mut buf = String::new();
+    tight(&mut buf, input).expect("String::write_fmt is infallible");
+    None.or(tri(&buf, ipv4addr))
+        .or(tri(&buf, ipv6addr))
+        .or(tri(&buf, socketaddrv4))
+        .or(tri(&buf, socketaddrv6))
 }
 
-fn dot_sep<T: FromStr>(p: &proc_macro::Literal) -> Option<(T, T)> {
-    let s = &*p.to_string();
-    let (o1, o2) = s.split_once('.')?;
-    Some((o1.parse().ok()?, o2.parse().ok()?))
+fn tri<T: FromStr>(s: &str, f: fn(T) -> TokenStream) -> Option<TokenStream> {
+    Some(f(s.parse().ok()?))
 }
 
-fn is_dot(p: &proc_macro::Punct) -> bool {
-    p.as_char() == '.'
-}
-fn is_colon(p: &proc_macro::Punct) -> bool {
-    p.as_char() == ':'
-}
-
-fn ipv4addr(a: u8, b: u8, c: u8, d: u8) -> TokenStream {
-    // ::core::net::Ipv4Addr::new(a, b, c, d);
+fn ipv4addr(addr: Ipv4Addr) -> TokenStream {
+    let mut args = TokenStream::new();
+    for oct in addr.octets() {
+        args.extend([lit(oct), comma()]);
+    }
     TokenStream::from_iter([
         colon2(),
         ident("core"),
@@ -91,20 +99,29 @@ fn ipv4addr(a: u8, b: u8, c: u8, d: u8) -> TokenStream {
         ident("Ipv4Addr"),
         colon2(),
         ident("new"),
-        parenthesized(TokenStream::from_iter([
-            lit(a),
-            comma(),
-            lit(b),
-            comma(),
-            lit(c),
-            comma(),
-            lit(d),
-        ])),
+        parenthesized(args),
     ])
 }
 
-fn socketaddrv4(a: u8, b: u8, c: u8, d: u8, port: u16) -> TokenStream {
-    // ::core::net::SocketAddrV4::new(ip, port);
+fn ipv6addr(addr: Ipv6Addr) -> TokenStream {
+    let mut args = TokenStream::new();
+    for seg in addr.segments() {
+        args.extend([lit(seg), comma()]);
+    }
+    TokenStream::from_iter([
+        colon2(),
+        ident("core"),
+        colon2(),
+        ident("net"),
+        colon2(),
+        ident("Ipv6Addr"),
+        colon2(),
+        ident("new"),
+        parenthesized(args),
+    ])
+}
+
+fn socketaddrv4(addr: SocketAddrV4) -> TokenStream {
     TokenStream::from_iter([
         colon2(),
         ident("core"),
@@ -115,9 +132,31 @@ fn socketaddrv4(a: u8, b: u8, c: u8, d: u8, port: u16) -> TokenStream {
         colon2(),
         ident("new"),
         parenthesized(TokenStream::from_iter([
-            ipv4addr(a, b, c, d),
+            ipv4addr(*addr.ip()),
             comma(),
-            lit(port),
+            lit(addr.port()),
+        ])),
+    ])
+}
+
+fn socketaddrv6(addr: SocketAddrV6) -> TokenStream {
+    TokenStream::from_iter([
+        colon2(),
+        ident("core"),
+        colon2(),
+        ident("net"),
+        colon2(),
+        ident("SocketAddrV6"),
+        colon2(),
+        ident("new"),
+        parenthesized(TokenStream::from_iter([
+            ipv6addr(*addr.ip()),
+            comma(),
+            lit(addr.port()),
+            comma(),
+            lit(addr.flowinfo()),
+            comma(),
+            lit(addr.scope_id()),
         ])),
     ])
 }
@@ -147,16 +186,6 @@ fn lit<T: IntoLiteral>(n: T) -> TokenStream {
     TokenStream::from(TokenTree::Literal(T::into_literal(n)))
 }
 
-trait Ext {
-    fn parse<T: FromStr>(&self) -> Option<T>
-    where
-        Self: Borrow<proc_macro::Literal>,
-    {
-        FromStr::from_str(&self.borrow().to_string()).ok()
-    }
-}
-impl<T> Ext for T {}
-
 trait IntoLiteral {
     fn into_literal(self) -> proc_macro::Literal;
 }
@@ -173,53 +202,6 @@ macro_rules! impl_into_literal {
 impl_into_literal! {
     u8 = u8_unsuffixed;
     u16 = u16_unsuffixed;
+    u32 = u32_unsuffixed;
     &str = string;
-}
-
-#[cfg(test)]
-mod tests {
-    use expect_test::expect;
-    use quote::quote;
-
-    #[test]
-    fn test() {
-        expect![[r#"
-            TokenStream [
-                Literal {
-                    lit: 127.0,
-                },
-                Punct {
-                    char: '.',
-                    spacing: Alone,
-                },
-                Literal {
-                    lit: 0.1,
-                },
-            ]
-        "#]]
-        .assert_debug_eq(&quote!(127.0.0.1));
-
-        expect![[r#"
-            TokenStream [
-                Literal {
-                    lit: 127.0,
-                },
-                Punct {
-                    char: '.',
-                    spacing: Alone,
-                },
-                Literal {
-                    lit: 0.1,
-                },
-                Punct {
-                    char: ':',
-                    spacing: Alone,
-                },
-                Literal {
-                    lit: 5000,
-                },
-            ]
-        "#]]
-        .assert_debug_eq(&quote!(127.0.0.1:5000));
-    }
 }
